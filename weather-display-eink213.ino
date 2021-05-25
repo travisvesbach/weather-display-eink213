@@ -393,7 +393,7 @@ bool getWeatherData(WiFiClient& client, const String& request_type) {
 const unsigned char* getIcon(String icon, String iconSize) {
     // clear sky
     if (icon == "01d") return (iconSize == "small") ? iconClearSmall : iconClear;
-    if (icon == "01n") (iconSize == "small") ? iconClearNightSmall : iconClearNight;
+    if (icon == "01n") return (iconSize == "small") ? iconClearNightSmall : iconClearNight;
     // few clouds
     if (icon == "02d") return (iconSize == "small") ? iconFewCloudsSmall : iconFewClouds;
     if (icon == "02n") return (iconSize == "small") ? iconFewCloudsNightSmall : iconFewCloudsNight;
