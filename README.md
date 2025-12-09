@@ -14,3 +14,6 @@ Icons are from [Meteocons](https://www.alessioatzeni.com/meteocons/) and convert
 ### Board Details
   * model: GxGDEW0213M21
   * resolution: 212x104
+
+  * model: GDEM0213B74
+  * resolution: 250x122
