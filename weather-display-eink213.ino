@@ -10,6 +10,9 @@
 
   model: GxGDEW0213M21
   resolution: 212x104
+
+  model: GDEM0213B74
+  resolution: 250x122
 */
 
 #define LILYGO_T5_V213
@@ -24,6 +27,7 @@
 #include <U8g2_for_Adafruit_GFX.h>
 #include "icons.h"
 
+#include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -40,16 +44,24 @@ static const uint8_t EPD_SCK  = 18; //CLK on pinout?
 static const uint8_t EPD_MISO = -1; // Master-In Slave-Out not used, as no data from display
 static const uint8_t EPD_MOSI = 23;
 
-
-GxEPD2_BW<GxEPD2_213_M21, GxEPD2_213_M21::HEIGHT> display(GxEPD2_213_M21(/*CS=D8*/ EPD_CS, /*DC=D3*/ EPD_DC, /*RST=D4*/ EPD_RST, /*BUSY=D2*/ EPD_BUSY));
+// Uncomment the correct one based on the model being used
+// GxEPD2_BW<GxEPD2_213_M21, GxEPD2_213_M21::HEIGHT> display(GxEPD2_213_M21(/*CS=D8*/ EPD_CS, /*DC=D3*/ EPD_DC, /*RST=D4*/ EPD_RST, /*BUSY=D2*/ EPD_BUSY));
+GxEPD2_BW<GxEPD2_213_B74, GxEPD2_213_B74::HEIGHT> display(GxEPD2_213_B74(/*CS=D8*/ EPD_CS, /*DC=D3*/ EPD_DC, /*RST=D4*/ EPD_RST, /*BUSY=D2*/ EPD_BUSY));
 
 // Select u8g2 font from here: https://github.com/olikraus/u8g2/wiki/fntlistall
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 
+const uint8_t* FONT_SMALL = u8g2_font_courB08_tf;
+const uint8_t* FONT_MEDIUM = u8g2_font_courB10_tf;
+const uint8_t* FONT_LARGE = u8g2_font_courB14_tf;
+const uint8_t* FONT_XLARGE = u8g2_font_courB18_tf;
 
 String  time_string, date_string;
 int     current_hour = 0, current_min = 0, current_sec = 0;
 long    startTime = 0;
+
+// using ° can cause spacing issues
+const char DEGREE_SIGN = char(176);
 
 typedef struct {
     int      timestamp;
@@ -75,8 +87,7 @@ void setup() {
     Serial.begin(115200);
     if (startWiFi() == WL_CONNECTED && setupTime() == true) {
         if ((current_hour >= WAKEUP_TIME && current_hour <= SLEEP_TIME)) {
-            Serial.println("Initialising Display");
-            initialiseDisplay();
+            initializeDisplay();
 
             Serial.println("Attempt to get weather");
             int attempts = 1;
@@ -128,53 +139,70 @@ void displayWeather() {
     updateLocalTime();
     drawHeadingSection();
     drawMainWeatherSection();
-    drawSunWindSection(155, 15);
 
-    int x = 0;
-    int y = 83;
     for(int i=0; i < forecast_count; i++) {
-        draw3hrForecast(x, y, i);
-        x += 43;
+        draw3hrForecast(i);
     }
-    drawBattery(15, 12);
 }
 
 void drawHeadingSection() {
-    u8g2Fonts.setFont(u8g2_font_helvB08_tf);
-    drawString(105, 1, CITY_DISPLAY, CENTER);
-    drawString(0, 1, time_string, LEFT);
-    drawString(DISPLAY_WIDTH, 1, date_string, RIGHT);
-    display.drawLine(0, 11, DISPLAY_WIDTH, 11, GxEPD_BLACK);
+    u8g2Fonts.setFont(FONT_SMALL);
+    drawString(0, 0, date_string, LEFT);
+    drawString(DISPLAY_WIDTH / 2, 0, time_string, CENTER);
+    drawBattery();
+    display.drawLine(0, 10, DISPLAY_WIDTH, 10, GxEPD_BLACK);
 }
 
 void drawMainWeatherSection() {
-    u8g2Fonts.setFont(u8g2_font_helvB14_tf);
-    drawString(3, 25, String(weather_current[0].temperature, DECIMALS) + "° / " + String(weather_current[0].humidity, 0) + "%", LEFT);
+    u8g2Fonts.setFont(FONT_LARGE); // Explore u8g2 fonts from here: https://github.com/olikraus/u8g2/wiki/fntlistall
+    drawString(0, 25, String(weather_current[0].temperature, DECIMALS) + DEGREE_SIGN + "/" + String(weather_current[0].humidity, 0) + "%", LEFT);
 
-    display.drawBitmap(100, 13, getIcon(weather_current[0].icon, "large"), 35, 35, GxEPD_BLACK);
+    if (MODEL == "GxGDEW0213M21") display.drawBitmap(100, 13, getIcon(weather_current[0].icon, "medium"), 35, 35, GxEPD_BLACK);
+    if (MODEL == "GDEM0213B74") display.drawBitmap((DISPLAY_WIDTH / 2) - 12, 14, getIcon(weather_current[0].icon, "large"), 45, 45, GxEPD_BLACK);
 
-    u8g2Fonts.setFont(u8g2_font_helvB08_tf);
-    drawString(3, 35, "Feels like " + String(weather_current[0].feels_like, DECIMALS) + "°", LEFT);
+    u8g2Fonts.setFont(FONT_SMALL);
+    drawString(0, 35, "Feels like " + String(weather_current[0].feels_like, DECIMALS) + DEGREE_SIGN, LEFT);
     String Wx_Description = weather_current[0].description;
-    drawString(2, 50, titleCase(Wx_Description), LEFT);
-    display.drawLine(0, 60, DISPLAY_WIDTH, 60, GxEPD_BLACK);
+    int y_above_forecast = DISPLAY_HEIGHT - 57;
+    if (MODEL == "GxGDEW0213M21") y_above_forecast = DISPLAY_HEIGHT - 47;
+    drawString(0, y_above_forecast - 10, titleCase(Wx_Description), LEFT);
+
+    // sun section
+    int sun_y = 15;
+    drawString(DISPLAY_WIDTH - 30, sun_y, convertUnixTime(weather_current[0].sunrise), RIGHT);
+    drawString(DISPLAY_WIDTH - 30, sun_y + 12, convertUnixTime(weather_current[0].sunset), RIGHT);
+    display.drawBitmap(DISPLAY_WIDTH - 30, sun_y - 9, iconSunrise, 35, 35, GxEPD_BLACK);
+
+    // wind section
+    String wind_string = windDegToDirection(weather_current[0].wind_direction) + " " + String(weather_current[0].wind_speed, DECIMALS) + String(UNITS == "M" ? " m/s" : " mph");
+    drawString(DISPLAY_WIDTH, y_above_forecast - 10, wind_string, RIGHT);
+    
+    // bottom line
+    display.drawLine(0, y_above_forecast, DISPLAY_WIDTH, y_above_forecast, GxEPD_BLACK);
 }
 
-void draw3hrForecast(int x, int y, int index) {
-    display.drawBitmap(x + 9, y - 12, getIcon(weather_forecast[index].icon, "small"), 25, 25, GxEPD_BLACK);
-    u8g2Fonts.setFont(u8g2_font_helvB08_tf);
-    drawString(x + 8, y - 21, convertUnixTime(weather_forecast[index].timestamp), LEFT);
-    drawString(x + 4, y + 13, String(weather_forecast[index].high, 0) + "°/" + String(weather_forecast[index].low, 0) + "°", LEFT);
-    display.drawLine(x + 42, y - 22, x + 42, y - 22 + 50 , GxEPD_BLACK);
-    display.drawLine(x, y - 22 + 50, x + 42, y - 22 + 50 , GxEPD_BLACK);
-}
+// displaying from the bottom going up in order keep positions relative
+void draw3hrForecast(int index) {
+    int width = (DISPLAY_WIDTH / 5);
+    int x_position = width * index;
+    int y_position = DISPLAY_HEIGHT - 1;
 
-void drawSunWindSection(int x, int y) {
-    u8g2Fonts.setFont(u8g2_font_helvB08_tf);
-    drawString(x, y, convertUnixTime(weather_current[0].sunrise), LEFT);
-    drawString(x, y + 12, convertUnixTime(weather_current[0].sunset), LEFT);
-    display.drawBitmap(x + 25, y - 9, iconSunrise, 35, 35, GxEPD_BLACK);
-    drawString(DISPLAY_WIDTH, y + 24, windDegToDirection(weather_current[0].wind_direction) + " " + String(weather_current[0].wind_speed, DECIMALS) + String(UNITS == "M" ? " m/s" : " mph"), RIGHT);
+    u8g2Fonts.setFont(FONT_SMALL);
+    display.drawLine(x_position, y_position, x_position + width, y_position, GxEPD_BLACK);
+    y_position -= 10;
+    String temperature = String(weather_forecast[index].high, 0) + DEGREE_SIGN + "/" + String(weather_forecast[index].low, 0) + DEGREE_SIGN;
+    drawString(x_position + (width / 2), y_position, temperature, CENTER);
+    if (MODEL == "GxGDEW0213M21") {
+        y_position -= 25;
+        display.drawBitmap(x_position + ((width - 25) / 2), y_position, getIcon(weather_forecast[index].icon, "small"), 25, 25, GxEPD_BLACK);
+    } else {
+        y_position -= 35;
+        display.drawBitmap(x_position + ((width - 35) / 2), y_position, getIcon(weather_forecast[index].icon, "medium"), 35, 35, GxEPD_BLACK);
+    }
+    y_position -= 9;
+    drawString(x_position + (width / 2), y_position, convertUnixTime(weather_forecast[index].timestamp), CENTER);
+    y_position -= 2;
+    display.drawLine(x_position + width, y_position, x_position + width, DISPLAY_HEIGHT, GxEPD_BLACK);
 }
 
 String windDegToDirection(float winddirection) {
@@ -197,7 +225,7 @@ String windDegToDirection(float winddirection) {
     return "?";
 }
 
-void drawBattery(int x, int y) {
+void drawBattery() {
     uint8_t percentage = 100;
     float voltage = analogRead(35) / 4096.0 * 7.46;
     if (voltage > 1 ) {
@@ -205,20 +233,20 @@ void drawBattery(int x, int y) {
         percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
         if (voltage >= 4.20) percentage = 100;
         if (voltage <= 3.50) percentage = 0;
-        display.drawRect(x + 15, y - 12, 19, 10, GxEPD_BLACK);
-        display.fillRect(x + 34, y - 10, 2, 5, GxEPD_BLACK);
-        display.fillRect(x + 17, y - 10, 15 * percentage / 100.0, 6, GxEPD_BLACK);
-        drawString(x + 60, y - 11, String(percentage) + "%", RIGHT);
-  }
+        display.drawRect(DISPLAY_WIDTH - 22, 0, 20, 9, GxEPD_BLACK);
+        display.fillRect(DISPLAY_WIDTH - 2, 2, 2, 5, GxEPD_BLACK);
+        display.fillRect(DISPLAY_WIDTH - 20, 2, 16 * percentage / 100.0, 5, GxEPD_BLACK);
+        drawString(DISPLAY_WIDTH - 23, 0, String(percentage) + "%", RIGHT);
+    }
 }
 
 void drawString(int x, int y, String text, alignmentType alignment) {
     int16_t  x1, y1;
     uint16_t w, h;
     display.setTextWrap(false);
-    display.getTextBounds(text, x, y, &x1, &y1, &w, &h);
+    display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
     if (alignment == RIGHT)  x = x - w;
-    if (alignment == CENTER) x = x - w / 2;
+    if (alignment == CENTER) x = x - (w / 2);
     u8g2Fonts.setCursor(x, y + h);
     u8g2Fonts.print(text);
 }
@@ -226,11 +254,8 @@ void drawString(int x, int y, String text, alignmentType alignment) {
 uint8_t startWiFi() {
     Serial.println("Connecting to: " + String(SSID));
 
-    // Google DNS
-    IPAddress dns(8, 8, 8, 8);
     WiFi.disconnect();
     WiFi.mode(WIFI_MODE_STA);
-    WiFi.setAutoConnect(true);
     WiFi.setAutoReconnect(true);
     WiFi.begin(SSID, PASSWORD);
 
@@ -264,7 +289,8 @@ void StopWiFi() {
 }
 
 boolean setupTime() {
-    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER, "time.nist.gov");
+    // configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER, "time.nist.gov");
+    configTime(0, 0, NTP_SERVER);  // UTC only
     setenv("TZ", TIMEZONE, 1);
     tzset();
     delay(100);
@@ -294,8 +320,8 @@ boolean updateLocalTime() {
     return true;
 }
 
-void initialiseDisplay() {
-    Serial.println("Initialising Display");
+void initializeDisplay() {
+    Serial.println("Initializing Display");
     display.init(115200, true, 2, false);
     SPI.end();
     SPI.begin(EPD_SCK, EPD_MISO, EPD_MOSI, EPD_CS);
@@ -305,7 +331,7 @@ void initialiseDisplay() {
     u8g2Fonts.setFontDirection(0);             // left to right (this is default)
     u8g2Fonts.setForegroundColor(GxEPD_BLACK); // apply Adafruit GFX color
     u8g2Fonts.setBackgroundColor(GxEPD_WHITE); // apply Adafruit GFX color
-    u8g2Fonts.setFont(u8g2_font_helvB10_tf);   // Explore u8g2 fonts from here: https://github.com/olikraus/u8g2/wiki/fntlistall
+    u8g2Fonts.setFont(FONT_MEDIUM);   // Explore u8g2 fonts from here: https://github.com/olikraus/u8g2/wiki/fntlistall
     display.fillScreen(GxEPD_WHITE);
     display.setFullWindow();
 }
@@ -335,7 +361,10 @@ bool getWeatherData(WiFiClient& client, const String& request_type) {
     client.stop();
 
     HTTPClient http;
-    String url = API_URL + "/data/2.5/" + request_type + "?q=" + CITY + "," + COUNTRY + "&APPID=" + API_KEY + "&mode=json&units=" + units + "&lang=" + LANGUAGE;
+    // for city name
+    // String url = API_URL + "/data/2.5/" + request_type + "?q=" + CITY + "," + COUNTRY + "&APPID=" + API_KEY + "&mode=json&units=" + units + "&lang=" + LANGUAGE;
+    // for city id
+    String url = API_URL + "/data/2.5/" + request_type + "?id=" + CITY_ID + "&APPID=" + API_KEY + "&mode=json&units=" + units + "&lang=" + LANGUAGE;
 
     if(request_type != "weather") {
         url += "&cnt=" + String(forecast_count);
@@ -355,10 +384,10 @@ bool getWeatherData(WiFiClient& client, const String& request_type) {
 
         JsonObject root = doc.as<JsonObject>();
         if (request_type == "weather") {
-            weather_current[0].description = root["weather"][0]["description"].as<char*>();
+            weather_current[0].description = root["weather"][0]["description"].as<String>();
             if(root["weather"][1]["description"].as<String>() != "" && root["weather"][1]["description"].as<String>() != "null") weather_current[0].description += " & " + root["weather"][1]["description"].as<String>();
             if(root["weather"][2]["description"].as<String>() != "" && root["weather"][2]["description"].as<String>() != "null") weather_current[0].description += " & " + root["weather"][2]["description"].as<String>();
-            weather_current[0].icon             = root["weather"][0]["icon"].as<char*>();
+            weather_current[0].icon             = root["weather"][0]["icon"].as<String>();
             weather_current[0].temperature      = root["main"]["temp"].as<float>();
             weather_current[0].humidity         = root["main"]["humidity"].as<float>();
             weather_current[0].feels_like       = root["main"]["feels_like"].as<float>();
@@ -374,7 +403,7 @@ bool getWeatherData(WiFiClient& client, const String& request_type) {
                 weather_forecast[i].timestamp    = list[i]["dt"].as<int>();
                 weather_forecast[i].low   = list[i]["main"]["temp_min"].as<float>();
                 weather_forecast[i].high  = list[i]["main"]["temp_max"].as<float>();
-                weather_forecast[i].icon  = list[i]["weather"][0]["icon"].as<char*>();
+                weather_forecast[i].icon  = list[i]["weather"][0]["icon"].as<String>();
             }
         }
 
@@ -391,26 +420,27 @@ bool getWeatherData(WiFiClient& client, const String& request_type) {
 }
 
 const unsigned char* getIcon(String icon, String iconSize) {
+    // if (iconSize == "large") return iconClearLarge;
     // clear sky
-    if (icon == "01d") return (iconSize == "small") ? iconClearSmall : iconClear;
-    if (icon == "01n") return (iconSize == "small") ? iconClearNightSmall : iconClearNight;
+    if (icon == "01d") return (iconSize == "small") ? iconClearSmall : (iconSize == "large") ? iconClearLarge : iconClear;
+    if (icon == "01n") return (iconSize == "small") ? iconClearNightSmall : ((iconSize == "large") ? iconClearNightLarge : iconClearNight);
     // few clouds
-    if (icon == "02d") return (iconSize == "small") ? iconFewCloudsSmall : iconFewClouds;
-    if (icon == "02n") return (iconSize == "small") ? iconFewCloudsNightSmall : iconFewCloudsNight;
+    if (icon == "02d") return (iconSize == "small") ? iconFewCloudsSmall : ((iconSize == "large") ? iconFewCloudsLarge : iconFewClouds);
+    if (icon == "02n") return (iconSize == "small") ? iconFewCloudsNightSmall : ((iconSize == "large") ? iconFewCloudsNightLarge : iconFewCloudsNight);
     // scattered clouds
-    if (icon == "03d" || icon == "03n") return (iconSize == "small") ? iconScatteredCloudsSmall : iconScatteredClouds;
+    if (icon == "03d" || icon == "03n") return (iconSize == "small") ? iconScatteredCloudsSmall : ((iconSize == "large") ? iconScatteredCloudsLarge : iconScatteredClouds);
     // broken clouds
-    if (icon == "04d" || icon == "04n") return (iconSize == "small") ? iconBrokenCloudsSmall : iconBrokenClouds;
+    if (icon == "04d" || icon == "04n") return (iconSize == "small") ? iconBrokenCloudsSmall : ((iconSize == "large") ? iconBrokenCloudsLarge : iconBrokenClouds);
     // shower rain
-    if (icon == "09d" || icon == "09n") return (iconSize == "small") ? iconShowerRainSmall : iconShowerRain;
+    if (icon == "09d" || icon == "09n") return (iconSize == "small") ? iconShowerRainSmall : ((iconSize == "large") ? iconShowerRainLarge : iconShowerRain);
     // rain
-    if (icon == "10d" || icon == "10n") return (iconSize == "small") ? iconRainSmall : iconRain;
+    if (icon == "10d" || icon == "10n") return (iconSize == "small") ? iconRainSmall : ((iconSize == "large") ? iconRainLarge : iconRain);
     // thunderstorm
-    if (icon == "11d" || icon == "11n") return (iconSize == "small") ? iconThunderstormSmall : iconThunderstorm;
+    if (icon == "11d" || icon == "11n") return (iconSize == "small") ? iconThunderstormSmall : ((iconSize == "large") ? iconThunderstormLarge : iconThunderstorm);
     // snow
-    if (icon == "13d" || icon == "13n") return (iconSize == "small") ? iconSnowSmall : iconSnow;
+    if (icon == "13d" || icon == "13n") return (iconSize == "small") ? iconSnowSmall : ((iconSize == "large") ? iconSnowLarge : iconSnow);
     // mist
-    if (icon == "50d") return (iconSize == "small") ? iconMistSmall : iconMist;
-    if (icon == "50n") return (iconSize == "small") ? iconMistNightSmall : iconMistNight;
-    return (iconSize == "small") ? iconNASmall : iconNA;
+    if (icon == "50d") return (iconSize == "small") ? iconMistSmall : ((iconSize == "large") ? iconMistLarge : iconMist);
+    if (icon == "50n") return (iconSize == "small") ? iconMistNightSmall : ((iconSize == "large") ? iconMistNightLarge : iconMistNight);
+    return (iconSize == "small") ? iconNASmall : ((iconSize == "large") ? iconNALarge : iconNA);
 }
